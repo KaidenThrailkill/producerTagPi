@@ -1,0 +1,26 @@
+default_sound: "sounds/mombo.m4a"
+
+events:
+  push:
+    default: "sounds/mombo.m4a"
+    authors:
+      mgviolan: "sounds/mombo.m4a"
+      KaidenThrailkill: "sounds/ProducertagV2.m4a"
+
+  pr_opened:
+    default: "sounds/mombo.m4a"
+    authors:
+      mgviolan: "sounds/mombo.m4a"
+      KaidenThrailkill: "sounds/ProducertagV2.m4a"
+
+  pr_merged:
+    default: "sounds/mombo.m4a"
+    authors:
+      mgviolan: "sounds/mombo.m4a"
+      KaidenThrailkill: "sounds/ProducertagV2.m4a"
+
+  pr_approved:
+    default: "sounds/mombo.m4a"
+    authors:
+      mgviolan: "sounds/mombo.m4a"
+      kaidenthrailkill: "sounds/ProducertagV2.m4a"
