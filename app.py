@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import yaml
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -23,11 +24,15 @@ CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
 SOUNDS_DIR = Path("sounds")
 TEMPLATES_DIR = Path("templates")
 WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "").encode()
+NOTION_SIGNING_SECRET = os.environ.get("NOTION_SIGNING_SECRET", "").encode()
+NOTION_INTEGRATION_TOKEN = os.environ.get("NOTION_INTEGRATION_TOKEN", "")
+NOTION_API_VERSION = os.environ.get("NOTION_API_VERSION", "2026-03-11")
 DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 
 ALLOWED_AUDIO_EXT = {".mp3", ".m4a", ".wav", ".aiff", ".aif", ".ogg", ".flac"}
 EVENT_LOG: deque = deque(maxlen=100)
+NOTION_PAGE_STATUS_CACHE: dict[str, str] = {}
 
 app = FastAPI()
 security = HTTPBasic()
@@ -264,6 +269,165 @@ async def api_play(request: Request, _: str = Depends(require_auth)) -> dict:
         raise HTTPException(status_code=404, detail="not found")
     play_sound(p)
     return {"status": "playing", "name": name}
+
+
+def verify_notion_signature(raw_body: bytes, signature_header: Optional[str]) -> bool:
+    if not NOTION_SIGNING_SECRET:
+        log.warning("NOTION_SIGNING_SECRET is unset — rejecting request")
+        return False
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    sent = signature_header.split("=", 1)[1]
+    mac = hmac.new(NOTION_SIGNING_SECRET, raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sent, mac)
+
+
+async def fetch_notion_page(page_id: str) -> Optional[dict]:
+    if not NOTION_INTEGRATION_TOKEN:
+        log.error("NOTION_INTEGRATION_TOKEN is unset — cannot fetch page %s", page_id)
+        return None
+    headers = {
+        "Authorization": f"Bearer {NOTION_INTEGRATION_TOKEN}",
+        "Notion-Version": NOTION_API_VERSION,
+    }
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=headers)
+        if r.status_code != 200:
+            log.error("Notion API %s returned %s: %s", url, r.status_code, r.text[:300])
+            return None
+        return r.json()
+    except httpx.HTTPError as e:
+        log.error("Notion API request failed: %s", e)
+        return None
+
+
+def read_status_name(page: dict, status_property: str) -> Optional[str]:
+    prop = page.get("properties", {}).get(status_property)
+    if not prop:
+        return None
+    status = prop.get("status")
+    if isinstance(status, dict):
+        return status.get("name")
+    select = prop.get("select")
+    if isinstance(select, dict):
+        return select.get("name")
+    return None
+
+
+def read_assignee_ids(page: dict, assignee_property: str) -> list[str]:
+    prop = page.get("properties", {}).get(assignee_property)
+    if not prop:
+        return []
+    people = prop.get("people") or []
+    return [p.get("id") for p in people if p.get("id")]
+
+
+def resolve_notion_sound(config: dict, assignee_ids: list[str]) -> tuple[Optional[Path], Optional[str]]:
+    notion_cfg = config.get("notion", {}) or {}
+    users = notion_cfg.get("users") or {}
+    for uid in assignee_ids:
+        path_str = users.get(uid)
+        if not path_str:
+            continue
+        p = Path(path_str)
+        if p.exists():
+            return p, uid
+        log.warning("Configured Notion sound not found on disk: %s", path_str)
+    return None, None
+
+
+@app.post("/notion")
+async def notion_webhook(
+    request: Request,
+    x_notion_signature: Optional[str] = Header(default=None),
+) -> dict:
+    raw = await request.body()
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+
+    if isinstance(payload, dict) and "verification_token" in payload and "type" not in payload:
+        token = payload["verification_token"]
+        log.warning("NOTION VERIFICATION TOKEN — paste this into Notion's UI: %s", token)
+        record_event({"status": "notion_verification", "token_prefix": token[:12] + "…"})
+        return {"status": "verification_received"}
+
+    if not verify_notion_signature(raw, x_notion_signature):
+        raise HTTPException(status_code=401, detail="invalid signature")
+
+    event_type = payload.get("type")
+    entity = payload.get("entity") or {}
+    page_id = entity.get("id") if entity.get("type") == "page" else None
+
+    if event_type not in ("page.properties_updated", "page.created") or not page_id:
+        record_event({"status": "ignored", "source": "notion", "event": event_type})
+        return {"status": "ignored", "event": event_type}
+
+    config = load_config()
+    notion_cfg = config.get("notion", {}) or {}
+    status_property = notion_cfg.get("status_property", "Status")
+    done_value = notion_cfg.get("done_value", "Complete")
+    assignee_property = notion_cfg.get("assignee_property", "Assigned To")
+
+    page = await fetch_notion_page(page_id)
+    if not page:
+        record_event({"status": "fetch_failed", "source": "notion", "page_id": page_id})
+        return {"status": "fetch_failed", "page_id": page_id}
+
+    current_status = read_status_name(page, status_property)
+    prior_status = NOTION_PAGE_STATUS_CACHE.get(page_id)
+    NOTION_PAGE_STATUS_CACHE[page_id] = current_status or ""
+
+    if current_status != done_value:
+        record_event({
+            "status": "no_sound",
+            "source": "notion",
+            "event": event_type,
+            "page_id": page_id,
+            "page_status": current_status,
+            "reason": "status_not_done",
+        })
+        return {"status": "no_sound", "reason": "status_not_done", "page_status": current_status}
+
+    if prior_status == done_value:
+        record_event({
+            "status": "no_sound",
+            "source": "notion",
+            "event": event_type,
+            "page_id": page_id,
+            "reason": "already_done",
+        })
+        return {"status": "no_sound", "reason": "already_done"}
+
+    assignee_ids = read_assignee_ids(page, assignee_property)
+    log.info("Notion done event: page=%s assignees=%s", page_id, assignee_ids)
+
+    sound, matched_user = resolve_notion_sound(config, assignee_ids)
+    if not sound:
+        record_event({
+            "status": "no_sound",
+            "source": "notion",
+            "event": event_type,
+            "page_id": page_id,
+            "assignees": assignee_ids,
+            "reason": "no_matching_assignee",
+        })
+        return {"status": "no_sound", "reason": "no_matching_assignee", "assignees": assignee_ids}
+
+    play_sound(sound)
+    record_event({
+        "status": "played",
+        "source": "notion",
+        "event": event_type,
+        "page_id": page_id,
+        "user_id": matched_user,
+        "sound": str(sound),
+    })
+    return {"status": "played", "page_id": page_id, "user_id": matched_user, "sound": str(sound)}
 
 
 @app.get("/api/events")

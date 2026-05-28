@@ -24,3 +24,11 @@ events:
     authors:
       mgviolan: "sounds/mombo.m4a"
       kaidenthrailkill: "sounds/ProducertagV2.m4a"
+
+notion:
+  status_property: "Status"
+  done_value: "Complete"
+  assignee_property: "Assigned To"
+  users:
+    "2a0d872b-594c-8195-bd89-0002e7d16420": "sounds/josh.m4a"
+    "2ccd872b-594c-8182-95d7-000205204d34": "sounds/isaiah.m4a"
