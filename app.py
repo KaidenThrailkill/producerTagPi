@@ -388,11 +388,17 @@ async def notion_webhook(
     except Exception:
         raise HTTPException(status_code=400, detail="invalid json")
 
-    if isinstance(payload, dict) and "verification_token" in payload and "type" not in payload:
+    if isinstance(payload, dict) and "verification_token" in payload:
         token = payload["verification_token"]
         log.warning("NOTION VERIFICATION TOKEN — paste this into Notion's UI: %s", token)
         record_event({"status": "notion_verification", "source": "notion", "token_prefix": token[:12] + "…"})
         return {"status": "verification_received"}
+
+    # Diagnostic: if signature verification will fail and there's no verification_token,
+    # log the payload keys + signature header so we can see what Notion actually sent.
+    if not NOTION_SIGNING_SECRET:
+        keys = list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
+        log.warning("NOTION payload (no secret set): keys=%s sig_header=%r", keys, x_notion_signature)
 
     if not verify_notion_signature(raw, x_notion_signature):
         raise HTTPException(status_code=401, detail="invalid signature")
