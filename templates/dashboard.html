@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProducerTags</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #2f81f7;
+      --green: #2ea043;
+      --red: #f85149;
+      --yellow: #d29922;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    main { padding: 24px; max-width: 1100px; margin: 0 auto; display: grid; gap: 24px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+    }
+    .panel h2 { margin: 0 0 16px; font-size: 15px; font-weight: 600; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    input[type=text], select {
+      background: #0d1117;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+      min-width: 0;
+    }
+    input[type=text] { width: 180px; }
+    select { min-width: 200px; }
+    button {
+      background: #21262d;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { background: #30363d; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    button.primary:hover { background: #1f6feb; }
+    button.danger { background: transparent; border-color: var(--red); color: var(--red); }
+    button.danger:hover { background: rgba(248, 81, 73, 0.1); }
+    button.small { padding: 3px 8px; font-size: 12px; }
+    .event-block {
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+      margin-top: 16px;
+    }
+    .event-block:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+    .event-block h3 { margin: 0 0 12px; font-size: 14px; color: var(--accent); font-weight: 600; }
+    .label { color: var(--muted); font-size: 12px; margin-right: 8px; min-width: 70px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; }
+    .status-played { color: var(--green); }
+    .status-no_sound { color: var(--yellow); }
+    .status-ignored { color: var(--muted); }
+    .toast {
+      position: fixed; bottom: 20px; right: 20px;
+      background: var(--panel); border: 1px solid var(--border);
+      padding: 10px 16px; border-radius: 6px; font-size: 13px;
+      opacity: 0; transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .toast.ok { border-color: var(--green); }
+    .toast.err { border-color: var(--red); }
+    .upload-row { display: flex; gap: 8px; align-items: center; }
+    .sound-list { display: grid; gap: 6px; }
+    .sound-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px; background: #0d1117; border-radius: 6px; border: 1px solid var(--border);
+    }
+    .sound-name { flex: 1; font-family: ui-monospace, "SF Mono", monospace; font-size: 12px; }
+    .sound-size { color: var(--muted); font-size: 11px; }
+    .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ProducerTags</h1>
+    <div><button class="small" onclick="refreshAll()">Refresh</button></div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Event → Sound Configuration</h2>
+      <div id="config-editor"></div>
+      <div style="margin-top: 16px; display: flex; gap: 8px;">
+        <button class="primary" onclick="saveConfig()">Save Config</button>
+        <span id="default-row" style="margin-left: 16px;"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Audio Files</h2>
+      <div class="upload-row" style="margin-bottom: 16px;">
+        <input type="file" id="upload" accept=".mp3,.m4a,.wav,.aiff,.ogg,.flac" />
+        <button onclick="uploadSound()">Upload</button>
+      </div>
+      <div id="sounds-list" class="sound-list"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Recent Events</h2>
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Event</th><th>Actor</th><th>Sound</th><th>Status</th></tr>
+        </thead>
+        <tbody id="events-tbody"><tr><td colspan="5" class="empty">No events yet</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+const EVENT_KEYS = ["push", "pr_opened", "pr_merged", "pr_approved"];
+const EVENT_LABELS = {push: "Push", pr_opened: "PR Opened", pr_merged: "PR Merged", pr_approved: "PR Approved"};
+let state = {config: null, sounds: []};
+
+function toast(msg, kind="ok") {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast show " + kind;
+  setTimeout(() => t.className = "toast", 2500);
+}
+
+async function api(path, opts={}) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+function soundOptions(selected) {
+  const opts = ['<option value="">— none —</option>'];
+  for (const s of state.sounds) {
+    const path = "sounds/" + s.name;
+    const sel = path === selected ? " selected" : "";
+    opts.push(`<option value="${path}"${sel}>${s.name}</option>`);
+  }
+  return opts.join("");
+}
+
+function renderConfig() {
+  const cfg = state.config || {events: {}};
+  cfg.events = cfg.events || {};
+  const root = document.getElementById("config-editor");
+  root.innerHTML = "";
+
+  for (const ev of EVENT_KEYS) {
+    const evCfg = cfg.events[ev] || {};
+    const authors = evCfg.authors || {};
+    const block = document.createElement("div");
+    block.className = "event-block";
+    block.innerHTML = `
+      <h3>${EVENT_LABELS[ev]}</h3>
+      <div class="row">
+        <span class="label">Default</span>
+        <select data-ev="${ev}" data-kind="default">${soundOptions(evCfg.default)}</select>
+        <button class="small" onclick="testPlayFromSelect(this)">▶ Test</button>
+      </div>
+      <div data-authors="${ev}"></div>
+      <div class="row" style="margin-top: 8px;">
+        <button class="small" onclick="addAuthor('${ev}')">+ Add author</button>
+      </div>
+    `;
+    root.appendChild(block);
+    const authorsDiv = block.querySelector(`[data-authors="${ev}"]`);
+    for (const [login, path] of Object.entries(authors)) {
+      authorsDiv.appendChild(authorRow(ev, login, path));
+    }
+  }
+
+  // default_sound (global)
+  const dr = document.getElementById("default-row");
+  dr.innerHTML = `
+    <span class="label" style="vertical-align: middle;">Global fallback</span>
+    <select id="global-default">${soundOptions(cfg.default_sound)}</select>
+  `;
+}
+
+function authorRow(ev, login, path) {
+  const div = document.createElement("div");
+  div.className = "row";
+  div.innerHTML = `
+    <span class="label">Author</span>
+    <input type="text" value="${login}" data-ev="${ev}" data-kind="author-name" placeholder="github-login" />
+    <select data-ev="${ev}" data-kind="author-sound">${soundOptions(path)}</select>
+    <button class="small" onclick="testPlayFromSelect(this)">▶</button>
+    <button class="small danger" onclick="this.parentNode.remove()">✕</button>
+  `;
+  return div;
+}
+
+function addAuthor(ev) {
+  const authorsDiv = document.querySelector(`[data-authors="${ev}"]`);
+  authorsDiv.appendChild(authorRow(ev, "", ""));
+}
+
+function collectConfig() {
+  const cfg = {events: {}};
+  const globalDefault = document.getElementById("global-default")?.value;
+  if (globalDefault) cfg.default_sound = globalDefault;
+  for (const ev of EVENT_KEYS) {
+    const evCfg = {authors: {}};
+    const defSelect = document.querySelector(`select[data-ev="${ev}"][data-kind="default"]`);
+    if (defSelect && defSelect.value) evCfg.default = defSelect.value;
+    const authorRows = document.querySelectorAll(`[data-authors="${ev}"] .row`);
+    for (const row of authorRows) {
+      const name = row.querySelector('[data-kind="author-name"]').value.trim();
+      const sound = row.querySelector('[data-kind="author-sound"]').value;
+      if (name && sound) evCfg.authors[name] = sound;
+    }
+    cfg.events[ev] = evCfg;
+  }
+  return cfg;
+}
+
+async function saveConfig() {
+  try {
+    await api("/api/config", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(collectConfig()),
+    });
+    toast("Config saved");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function testPlayFromSelect(btn) {
+  const sel = btn.parentNode.querySelector("select");
+  const path = sel.value;
+  if (!path) { toast("No sound selected", "err"); return; }
+  const name = path.replace(/^sounds\//, "");
+  playSound(name);
+}
+
+async function playSound(name) {
+  try {
+    await api("/api/play", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name}),
+    });
+    toast("Playing " + name);
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function deleteSound(name) {
+  if (!confirm(`Delete ${name}?`)) return;
+  try {
+    await api("/api/sounds/" + encodeURIComponent(name), {method: "DELETE"});
+    toast("Deleted " + name);
+    await loadSounds();
+    renderConfig();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function uploadSound() {
+  const input = document.getElementById("upload");
+  const file = input.files[0];
+  if (!file) { toast("Pick a file first", "err"); return; }
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    await api("/api/sounds", {method: "POST", body: fd});
+    toast("Uploaded " + file.name);
+    input.value = "";
+    await loadSounds();
+    renderConfig();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function renderSounds() {
+  const list = document.getElementById("sounds-list");
+  if (!state.sounds.length) {
+    list.innerHTML = '<div class="empty">No audio files yet — upload one above.</div>';
+    return;
+  }
+  list.innerHTML = state.sounds.map(s => `
+    <div class="sound-item">
+      <span class="sound-name">${s.name}</span>
+      <span class="sound-size">${(s.size/1024).toFixed(1)} KB</span>
+      <button class="small" onclick="playSound('${s.name.replace(/'/g, "\\'")}')">▶ Play</button>
+      <button class="small danger" onclick="deleteSound('${s.name.replace(/'/g, "\\'")}')">Delete</button>
+    </div>
+  `).join("");
+}
+
+function renderEvents(events) {
+  const tbody = document.getElementById("events-tbody");
+  if (!events.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">No events yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = events.map(e => {
+    const t = new Date(e.timestamp);
+    const time = t.toLocaleString();
+    return `<tr>
+      <td>${time}</td>
+      <td>${e.event || e.github_event || ""}</td>
+      <td>${e.actor || ""}</td>
+      <td style="font-family: ui-monospace, monospace; font-size: 12px;">${e.sound || ""}</td>
+      <td class="status-${e.status}">${e.status}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function loadConfig() {
+  state.config = await api("/api/config");
+  renderConfig();
+}
+
+async function loadSounds() {
+  const r = await api("/api/sounds");
+  state.sounds = r.sounds;
+  renderSounds();
+}
+
+async function loadEvents() {
+  const r = await api("/api/events");
+  renderEvents(r.events);
+}
+
+async function refreshAll() {
+  await loadSounds();
+  await loadConfig();
+  await loadEvents();
+}
+
+refreshAll();
+setInterval(loadEvents, 3000);
+</script>
+</body>
+</html>
