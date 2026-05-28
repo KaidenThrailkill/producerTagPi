@@ -131,9 +131,9 @@
       <h2>Recent Events</h2>
       <table>
         <thead>
-          <tr><th>Time</th><th>Event</th><th>Actor</th><th>Sound</th><th>Status</th></tr>
+          <tr><th>Time</th><th>Source</th><th>Event</th><th>Actor</th><th>Sound</th><th>Status</th><th>Detail</th></tr>
         </thead>
-        <tbody id="events-tbody"><tr><td colspan="5" class="empty">No events yet</td></tr></tbody>
+        <tbody id="events-tbody"><tr><td colspan="7" class="empty">No events yet</td></tr></tbody>
       </table>
     </section>
   </main>
@@ -317,21 +317,40 @@ function renderSounds() {
   `).join("");
 }
 
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function buildDetail(e) {
+  const parts = [];
+  if (e.reason) parts.push(e.reason);
+  if (e.action) parts.push("action=" + e.action);
+  if (e.page_status) parts.push("status=" + e.page_status);
+  if (e.page_id) parts.push("page=" + String(e.page_id).slice(0, 8));
+  if (e.user_id) parts.push("user=" + String(e.user_id).slice(0, 8));
+  if (Array.isArray(e.assignees) && e.assignees.length) parts.push(`assignees=${e.assignees.length}`);
+  if (e.token_prefix) parts.push("token=" + e.token_prefix);
+  return parts.join(" · ");
+}
+
 function renderEvents(events) {
   const tbody = document.getElementById("events-tbody");
   if (!events.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">No events yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No events yet</td></tr>';
     return;
   }
   tbody.innerHTML = events.map(e => {
-    const t = new Date(e.timestamp);
-    const time = t.toLocaleString();
+    const time = new Date(e.timestamp).toLocaleString();
+    const source = e.source || "";
+    const eventName = e.event || e.github_event || "";
     return `<tr>
-      <td>${time}</td>
-      <td>${e.event || e.github_event || ""}</td>
-      <td>${e.actor || ""}</td>
-      <td style="font-family: ui-monospace, monospace; font-size: 12px;">${e.sound || ""}</td>
-      <td class="status-${e.status}">${e.status}</td>
+      <td>${escapeHtml(time)}</td>
+      <td>${escapeHtml(source)}</td>
+      <td>${escapeHtml(eventName)}</td>
+      <td>${escapeHtml(e.actor || "")}</td>
+      <td style="font-family: ui-monospace, monospace; font-size: 12px;">${escapeHtml(e.sound || "")}</td>
+      <td class="status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</td>
+      <td style="color: var(--muted); font-size: 12px;">${escapeHtml(buildDetail(e))}</td>
     </tr>`;
   }).join("");
 }

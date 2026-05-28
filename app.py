@@ -29,6 +29,8 @@ NOTION_INTEGRATION_TOKEN = os.environ.get("NOTION_INTEGRATION_TOKEN", "")
 NOTION_API_VERSION = os.environ.get("NOTION_API_VERSION", "2026-03-11")
 DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+ALSA_DEVICE = os.environ.get("ALSA_DEVICE")
+AUDIO_GAIN_DB = os.environ.get("AUDIO_GAIN_DB", "0")
 
 ALLOWED_AUDIO_EXT = {".mp3", ".m4a", ".wav", ".aiff", ".aif", ".ogg", ".flac"}
 EVENT_LOG: deque = deque(maxlen=100)
@@ -117,6 +119,41 @@ def pick_player() -> Optional[list[str]]:
 
 
 def play_sound(path: Path) -> None:
+    # macOS: afplay routes to the OS default output cleanly.
+    if platform.system() == "Darwin" and shutil.which("afplay"):
+        log.info("Playing %s via afplay", path)
+        subprocess.Popen(
+            ["afplay", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+        return
+
+    # Linux with ALSA_DEVICE set: pipe ffmpeg → aplay so we can pin the output
+    # device and apply a gain boost without relying on PulseAudio/PipeWire defaults.
+    if ALSA_DEVICE and shutil.which("ffmpeg") and shutil.which("aplay"):
+        log.info("Playing %s via ffmpeg|aplay device=%s gain=%sdB", path, ALSA_DEVICE, AUDIO_GAIN_DB)
+        ff = subprocess.Popen(
+            [
+                "ffmpeg", "-loglevel", "error", "-nostdin",
+                "-i", str(path),
+                "-filter:a", f"volume={AUDIO_GAIN_DB}dB",
+                "-f", "wav", "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+        subprocess.Popen(
+            ["aplay", "-q", "-D", ALSA_DEVICE],
+            stdin=ff.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        ff.stdout.close()
+        return
+
     player = pick_player()
     if not player:
         log.error("No audio player found (tried afplay, mpg123, ffplay, aplay, paplay)")
@@ -177,6 +214,7 @@ async def webhook(
     if not internal_event:
         record_event({
             "status": "ignored",
+            "source": "github",
             "github_event": x_github_event,
             "action": payload.get("action"),
             "actor": extract_actor(x_github_event or "", payload),
@@ -190,10 +228,10 @@ async def webhook(
 
     if sound:
         play_sound(sound)
-        record_event({"status": "played", "event": internal_event, "actor": actor, "sound": str(sound)})
+        record_event({"status": "played", "source": "github", "event": internal_event, "actor": actor, "sound": str(sound)})
         return {"status": "played", "event": internal_event, "actor": actor, "sound": str(sound)}
 
-    record_event({"status": "no_sound", "event": internal_event, "actor": actor, "sound": None})
+    record_event({"status": "no_sound", "source": "github", "event": internal_event, "actor": actor, "sound": None})
     return {"status": "no_sound", "event": internal_event, "actor": actor}
 
 
@@ -353,7 +391,7 @@ async def notion_webhook(
     if isinstance(payload, dict) and "verification_token" in payload and "type" not in payload:
         token = payload["verification_token"]
         log.warning("NOTION VERIFICATION TOKEN — paste this into Notion's UI: %s", token)
-        record_event({"status": "notion_verification", "token_prefix": token[:12] + "…"})
+        record_event({"status": "notion_verification", "source": "notion", "token_prefix": token[:12] + "…"})
         return {"status": "verification_received"}
 
     if not verify_notion_signature(raw, x_notion_signature):
