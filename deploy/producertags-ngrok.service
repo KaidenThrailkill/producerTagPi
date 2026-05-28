@@ -1,0 +1,15 @@
+[Unit]
+Description=ngrok tunnel for ProducerTags
+After=network-online.target producertags.service
+Wants=network-online.target
+Requires=producertags.service
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/local/bin/ngrok http 8000 --log=stdout
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
