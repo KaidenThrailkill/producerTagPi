@@ -1,4 +1,5 @@
 .env
+.notion_secret
 __pycache__/
 *.pyc
 .venv/

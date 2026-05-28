@@ -24,7 +24,22 @@ CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
 SOUNDS_DIR = Path("sounds")
 TEMPLATES_DIR = Path("templates")
 WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "").encode()
-NOTION_SIGNING_SECRET = os.environ.get("NOTION_SIGNING_SECRET", "").encode()
+NOTION_SECRET_FILE = Path(os.environ.get("NOTION_SECRET_FILE", ".notion_secret"))
+
+
+def load_notion_signing_secret() -> bytes:
+    """Prefer the auto-saved secret file; fall back to env for backwards compatibility."""
+    if NOTION_SECRET_FILE.exists():
+        return NOTION_SECRET_FILE.read_text().strip().encode()
+    return os.environ.get("NOTION_SIGNING_SECRET", "").encode()
+
+
+def save_notion_signing_secret(token: str) -> None:
+    NOTION_SECRET_FILE.write_text(token.strip())
+    try:
+        os.chmod(NOTION_SECRET_FILE, 0o600)
+    except OSError:
+        pass
 NOTION_INTEGRATION_TOKEN = os.environ.get("NOTION_INTEGRATION_TOKEN", "")
 NOTION_API_VERSION = os.environ.get("NOTION_API_VERSION", "2026-03-11")
 DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
@@ -310,13 +325,14 @@ async def api_play(request: Request, _: str = Depends(require_auth)) -> dict:
 
 
 def verify_notion_signature(raw_body: bytes, signature_header: Optional[str]) -> bool:
-    if not NOTION_SIGNING_SECRET:
-        log.warning("NOTION_SIGNING_SECRET is unset — rejecting request")
+    secret = load_notion_signing_secret()
+    if not secret:
+        log.warning("Notion signing secret not yet captured — rejecting request")
         return False
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     sent = signature_header.split("=", 1)[1]
-    mac = hmac.new(NOTION_SIGNING_SECRET, raw_body, hashlib.sha256).hexdigest()
+    mac = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(sent, mac)
 
 
@@ -390,15 +406,16 @@ async def notion_webhook(
 
     if isinstance(payload, dict) and "verification_token" in payload:
         token = payload["verification_token"]
-        log.warning("NOTION VERIFICATION TOKEN — paste this into Notion's UI: %s", token)
+        save_notion_signing_secret(token)
+        log.warning("NOTION VERIFICATION TOKEN captured and saved (paste this into Notion's UI to confirm): %s", token)
         record_event({"status": "notion_verification", "source": "notion", "token_prefix": token[:12] + "…"})
         return {"status": "verification_received"}
 
-    # Diagnostic: if signature verification will fail and there's no verification_token,
+    # Diagnostic: if signature verification will fail and there's no captured secret,
     # log the payload keys + signature header so we can see what Notion actually sent.
-    if not NOTION_SIGNING_SECRET:
+    if not load_notion_signing_secret():
         keys = list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
-        log.warning("NOTION payload (no secret set): keys=%s sig_header=%r", keys, x_notion_signature)
+        log.warning("NOTION payload (no secret captured yet): keys=%s sig_header=%r", keys, x_notion_signature)
 
     if not verify_notion_signature(raw, x_notion_signature):
         raise HTTPException(status_code=401, detail="invalid signature")
