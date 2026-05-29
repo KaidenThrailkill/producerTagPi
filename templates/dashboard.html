@@ -119,6 +119,14 @@
     </section>
 
     <section class="panel">
+      <h2>Notion → Sound Configuration</h2>
+      <div id="notion-editor"></div>
+      <div style="margin-top: 16px;">
+        <button class="primary" onclick="saveConfig()">Save Config</button>
+      </div>
+    </section>
+
+    <section class="panel">
       <h2>Audio Files</h2>
       <div class="upload-row" style="margin-bottom: 16px;">
         <input type="file" id="upload" accept=".mp3,.m4a,.wav,.aiff,.ogg,.flac" />
@@ -207,6 +215,59 @@ function renderConfig() {
     <span class="label" style="vertical-align: middle;">Global fallback</span>
     <select id="global-default">${soundOptions(cfg.default_sound)}</select>
   `;
+
+  renderNotionConfig(cfg.notion || {});
+}
+
+function renderNotionConfig(notion) {
+  const root = document.getElementById("notion-editor");
+  const users = notion.users || {};
+  root.innerHTML = `
+    <div class="event-block">
+      <h3>Trigger settings</h3>
+      <div class="row">
+        <span class="label">Status prop</span>
+        <input type="text" id="notion-status-property" value="${escapeHtml(notion.status_property || "Status")}" placeholder="Status" />
+        <span class="label" style="margin-left: 16px;">Done value</span>
+        <input type="text" id="notion-done-value" value="${escapeHtml(notion.done_value || "Complete")}" placeholder="Complete" />
+      </div>
+      <div class="row">
+        <span class="label">Assignee prop</span>
+        <input type="text" id="notion-assignee-property" value="${escapeHtml(notion.assignee_property || "Assigned To")}" placeholder="Assigned To" />
+      </div>
+    </div>
+    <div class="event-block">
+      <h3>Per-assignee sounds</h3>
+      <div id="notion-users"></div>
+      <div class="row" style="margin-top: 8px;">
+        <button class="small" onclick="addNotionUser()">+ Add assignee</button>
+        <span class="label" style="margin-left: 12px; color: var(--muted);">
+          User IDs come from the Detail column of Notion events below.
+        </span>
+      </div>
+    </div>
+  `;
+  const usersDiv = root.querySelector("#notion-users");
+  for (const [userId, path] of Object.entries(users)) {
+    usersDiv.appendChild(notionUserRow(userId, path));
+  }
+}
+
+function notionUserRow(userId, path) {
+  const div = document.createElement("div");
+  div.className = "row";
+  div.innerHTML = `
+    <span class="label">User ID</span>
+    <input type="text" value="${escapeHtml(userId)}" data-notion="user-id" placeholder="notion-user-uuid" style="width: 290px; font-family: ui-monospace, monospace; font-size: 12px;" />
+    <select data-notion="user-sound">${soundOptions(path)}</select>
+    <button class="small" onclick="testPlayFromSelect(this)">▶</button>
+    <button class="small danger" onclick="this.parentNode.remove()">✕</button>
+  `;
+  return div;
+}
+
+function addNotionUser() {
+  document.getElementById("notion-users").appendChild(notionUserRow("", ""));
 }
 
 function authorRow(ev, login, path) {
@@ -243,6 +304,20 @@ function collectConfig() {
     }
     cfg.events[ev] = evCfg;
   }
+
+  const notion = {users: {}};
+  const sp = document.getElementById("notion-status-property")?.value.trim();
+  const dv = document.getElementById("notion-done-value")?.value.trim();
+  const ap = document.getElementById("notion-assignee-property")?.value.trim();
+  if (sp) notion.status_property = sp;
+  if (dv) notion.done_value = dv;
+  if (ap) notion.assignee_property = ap;
+  for (const row of document.querySelectorAll('#notion-users .row')) {
+    const uid = row.querySelector('[data-notion="user-id"]').value.trim();
+    const sound = row.querySelector('[data-notion="user-sound"]').value;
+    if (uid && sound) notion.users[uid] = sound;
+  }
+  cfg.notion = notion;
   return cfg;
 }
 
@@ -327,8 +402,8 @@ function buildDetail(e) {
   if (e.action) parts.push("action=" + e.action);
   if (e.page_status) parts.push("status=" + e.page_status);
   if (e.page_id) parts.push("page=" + String(e.page_id).slice(0, 8));
-  if (e.user_id) parts.push("user=" + String(e.user_id).slice(0, 8));
-  if (Array.isArray(e.assignees) && e.assignees.length) parts.push(`assignees=${e.assignees.length}`);
+  if (e.user_id) parts.push("user=" + e.user_id);
+  if (Array.isArray(e.assignees) && e.assignees.length) parts.push("assignees=" + e.assignees.join(","));
   if (e.token_prefix) parts.push("token=" + e.token_prefix);
   return parts.join(" · ");
 }
